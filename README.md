@@ -85,7 +85,7 @@ This script will:
 - Train the CNN model using the dataset.
 - Save the trained model to `keypoint_cnn_model.pth`.
 
-(The script will train the model for 100 Epochs, and it's not really enough depending on your dataset)
+(The script will train the model for 100 Epochs, you can change that in the file easily)
 
 ## Testing the Model
 
