@@ -111,9 +111,6 @@ Here is an example of how to run the testing script:
 
 This command will process all depth images in the specified directory and output the predicted keypoints and rotations along with the time taken for each prediction.
 
-## License
-
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
 
 ## Contribution
 
