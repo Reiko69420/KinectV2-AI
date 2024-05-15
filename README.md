@@ -64,7 +64,7 @@ To create a dataset:
    Use the provided annotation script to label keypoints and rotations in your depth images. Run the script and follow the on-screen instructions:
 
     ```
-    python annotate_images.py
+    python create_annotation_data.py
     ```
 
    This will generate a JSON file with the annotations. This JSon files just need to be converted to another json,
