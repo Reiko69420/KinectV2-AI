@@ -8,6 +8,7 @@ That means, if some optimization is done, i actually thing that we can have a le
 (30fps would be amazing)
 
 The AI see only Normalized (0-255) Depth grayscale images to guess where the body part are, i think that founding another way to normalize depth would made the training much better
+(I'm a noob in AI stuff tbh)
 
 ## Table of Contents
 
