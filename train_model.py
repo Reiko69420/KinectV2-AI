@@ -1,34 +1,65 @@
 import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import Dataset, DataLoader
 import numpy as np
-import json
 import cv2
 import os
+import torch.nn as nn
+import torch.optim as optim
+import random
 
-class DepthDataset(Dataset):
-    def __init__(self, depth_images, keypoints, rotations):
-        self.depth_images = depth_images
-        self.keypoints = keypoints
-        self.rotations = rotations
-        
+class KeypointsDataset(Dataset):
+    def __init__(self, annotations_file, img_dir, num_samples=10000, transform=None):
+        self.img_dir = img_dir
+        self.transform = transform
+        self.img_names = []
+        self.keypoints = []
+
+        with open(annotations_file) as f:
+            lines = f.readlines()
+            i = 0
+            # Select random images (Beacuse 100k is a lot, i use K2HPD/Itop dataset)
+            random_lines = random.sample(lines, min(num_samples, len(lines)))
+            for line in random_lines:
+                parts = line.strip().split()
+                img_name = parts[0]
+                keypoints = list(map(int, parts[1:]))
+                self.img_names.append(img_name)
+                self.keypoints.append(keypoints)
+                i = i + 1
+                #print(i)
+
     def __len__(self):
-        return len(self.depth_images)
-    
+        return len(self.img_names)
+
     def __getitem__(self, idx):
-        image_path = self.depth_images[idx]
-        if not os.path.exists(image_path):
-            raise FileNotFoundError(f"Image not found: {image_path}")
-        
-        image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+        img_path = os.path.join(self.img_dir, self.img_names[idx])
+        image = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
         if image is None:
-            raise ValueError(f"Failed to read image: {image_path}")
-        
-        image = torch.tensor(image, dtype=torch.float32).unsqueeze(0) / 255.0  # Normalize image
-        keypoints = torch.tensor(self.keypoints[idx], dtype=torch.float32)
-        rotations = torch.tensor(self.rotations[idx], dtype=torch.float32)
-        return image, keypoints, rotations
+            print(f"Image {img_path} not found.")
+            return None
+
+        keypoints = np.array(self.keypoints[idx]).reshape(-1, 2)
+
+        if self.transform:
+            image = self.transform(image)
+
+        image = torch.tensor(image, dtype=torch.float32).unsqueeze(0) / 255.0
+        keypoints = torch.tensor(keypoints, dtype=torch.float32)
+        keypoints = keypoints.view(-1)  # Convertir en un vecteur 1D
+
+        return image, keypoints
+
+annotations_file = 'annotations.txt'
+img_dir = 'depth_images'
+dataset = KeypointsDataset(annotations_file, img_dir, num_samples=10000)
+
+def collate_fn(batch):
+    batch = [item for item in batch if item is not None]
+    if len(batch) == 0:
+        return None, None
+    return torch.utils.data.dataloader.default_collate(batch)
+
+dataloader = DataLoader(dataset, batch_size=48, shuffle=True, collate_fn=collate_fn)
 
 class KeypointCNN(nn.Module):
     def __init__(self):
@@ -36,62 +67,50 @@ class KeypointCNN(nn.Module):
         self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
         self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
-        self.pool = nn.MaxPool2d(2, 2)
-        
-        # Calculate output size
-        test_input = torch.randn(1, 1, 424, 512)
-        self.feature_size = self._get_feature_size(test_input)
-        
-        self.fc1 = nn.Linear(self.feature_size, 1024)
-        self.fc2 = nn.Linear(1024, 27)  # 27 points (5 bones * 3 vector value (x,y,z) + 4 * 3 rotation value)
-        
-    def _get_feature_size(self, x):
-        x = self.pool(nn.ReLU()(self.conv1(x)))
-        x = self.pool(nn.ReLU()(self.conv2(x)))
-        x = self.pool(nn.ReLU()(self.conv3(x)))
-        return x.numel()
+        self.fc1 = nn.Linear(128 * 64 * 53, 768)
+        self.fc2 = nn.Linear(768, 10)  # 10 points (5 bones * 2 cords)
 
     def forward(self, x):
-        x = self.pool(nn.ReLU()(self.conv1(x)))
-        x = self.pool(nn.ReLU()(self.conv2(x)))
-        x = self.pool(nn.ReLU()(self.conv3(x)))
-        x = x.view(-1, self.feature_size)
+        x = nn.ReLU()(self.conv1(x))
+        x = nn.MaxPool2d(2)(x)
+        x = nn.ReLU()(self.conv2(x))
+        x = nn.MaxPool2d(2)(x)
+        x = nn.ReLU()(self.conv3(x))
+        x = nn.MaxPool2d(2)(x)
+        x = x.view(-1, 128 * 64 * 53)
         x = nn.ReLU()(self.fc1(x))
         x = self.fc2(x)
         return x
 
-def train_model(model, dataloader, criterion, optimizer, num_epochs=100):
-    for epoch in range(num_epochs):
-        for inputs, keypoints, rotations in dataloader:
-            optimizer.zero_grad()
-            outputs = model(inputs)
-            loss = criterion(outputs, torch.cat((keypoints, rotations), dim=1))
-            loss.backward()
-            optimizer.step()
-        print(f'Epoch {epoch}/{num_epochs}, Loss: {loss.item()}')
-    
-    torch.save(model.state_dict(), 'keypoint_cnn_model.pth')
-    print("Model saved as keypoint_cnn_model.pth")
-
-with open('results.json', 'r') as f:
-    annotations = json.load(f)
-
-depth_images = []
-keypoints = []
-rotations = []
-
-for filename, data in annotations.items():
-    depth_images.append(f"dataset_kinect/{filename}")
-    points_3d = [data['points_3d'][point] for point in ['footLeft', 'footRight', 'kneeLeft', 'kneeRight', 'hips']]
-    rotations_3d = [data['rotations_3d'][rotation] for rotation in ['footLeft', 'footRight', 'kneeLeft', 'kneeRight']]
-    keypoints.append(np.array(points_3d).flatten())
-    rotations.append(np.array(rotations_3d).flatten())
-
-dataset = DepthDataset(depth_images, keypoints, rotations)
-dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
-
 model = KeypointCNN()
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model.to(device)
+
 criterion = nn.MSELoss()
 optimizer = optim.Adam(model.parameters(), lr=0.001)
+
+def train_model(model, dataloader, criterion, optimizer, num_epochs=50):
+    model.train()
+    for epoch in range(num_epochs):
+        running_loss = 0.0
+        for i, (inputs, labels) in enumerate(dataloader):
+            if inputs is None or labels is None:
+                continue
+            inputs, labels = inputs.to(device), labels.to(device)
+            optimizer.zero_grad()
+            outputs = model(inputs)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+            running_loss += loss.item()
+
+            if i % 10 == 0:
+                print(f'Epoch {epoch+1}/{num_epochs}, Step {i}, Loss: {loss.item():.4f}')
+
+        epoch_loss = running_loss / len(dataloader)
+        print(f'Epoch {epoch+1}/{num_epochs}, Loss: {epoch_loss:.4f}')
+
+    torch.save(model.state_dict(), 'keypointCnnModel_small.pth')
 
 train_model(model, dataloader, criterion, optimizer)

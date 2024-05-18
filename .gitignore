@@ -3,3 +3,10 @@
 /depth_images
 results.json
 annotations.json
+annotations.txt
+/__pycache__
+/data
+depth_data/depth.zip
+/model
+model.py
+testitop.py
